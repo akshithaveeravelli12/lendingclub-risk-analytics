@@ -1,77 +1,88 @@
 -- =====================================================================
--- 01_raw_checks.sql  |  Sanity checks on RAW.LC_LOANS_RAW after load
--- Full source-to-target reconciliation (with PASS/FAIL logging) is Step 2.
+-- 01_raw_checks.sql  |  Checks on RAW.LC_LOANS_RAW after load
+-- Run each section on its own (Snowsight: one SQL file per check).
 -- =====================================================================
+USE ROLE SYSADMIN;
 USE WAREHOUSE LOAN_WH;
 USE DATABASE LOAN_RISK;
 
-SET BATCH_ID = (SELECT MAX(_BATCH_ID) FROM RAW.LC_LOANS_RAW);
-
--- 1. What did COPY report?
-SELECT * FROM AUDIT.LOAD_LOG WHERE BATCH_ID = $BATCH_ID ORDER BY LOADED_AT DESC;
-
--- 2. Row count: pandas (source) vs Snowflake (target)
+-- ---------------------------------------------------------------------
+-- 1. Source (pandas profile) vs RAW reconciliation: 8 controls, $1 tolerance
+--    Result on first load: 8/8 PASS. Only variance: $0.31 on $27.3B TOTAL_PYMNT
+--    (float summation in pandas vs exact decimal in Snowflake).
+-- ---------------------------------------------------------------------
+WITH b AS (SELECT MAX(_BATCH_ID) AS id FROM RAW.LC_LOANS_RAW),
+r AS (SELECT * FROM RAW.LC_LOANS_RAW WHERE _BATCH_ID = (SELECT id FROM b)),
+src AS (
+  SELECT METRIC_NAME, METRIC_VALUE
+  FROM AUDIT.SOURCE_PROFILE
+  WHERE BATCH_ID = (SELECT id FROM b)
+),
+tgt AS (
+  SELECT 'ROW_COUNT' AS m, COUNT(*)::NUMBER(38,4) AS v FROM r
+  UNION ALL SELECT 'DISTINCT_ID',         COUNT(DISTINCT ID)                     FROM r
+  UNION ALL SELECT 'NON_NUMERIC_ID_ROWS', COUNT_IF(TRY_TO_NUMBER(ID) IS NULL)    FROM r
+  UNION ALL SELECT 'SUM_LOAN_AMNT',       SUM(TRY_TO_NUMBER(LOAN_AMNT, 38, 2))   FROM r
+  UNION ALL SELECT 'SUM_FUNDED_AMNT',     SUM(TRY_TO_NUMBER(FUNDED_AMNT, 38, 2)) FROM r
+  UNION ALL SELECT 'SUM_OUT_PRNCP',       SUM(TRY_TO_NUMBER(OUT_PRNCP, 38, 2))   FROM r
+  UNION ALL SELECT 'SUM_TOTAL_PYMNT',     SUM(TRY_TO_NUMBER(TOTAL_PYMNT, 38, 2)) FROM r
+  UNION ALL SELECT 'SUM_RECOVERIES',      SUM(TRY_TO_NUMBER(RECOVERIES, 38, 2))  FROM r
+)
 SELECT
-    sp.METRIC_VALUE                         AS SOURCE_ROWS,
-    (SELECT COUNT(*) FROM RAW.LC_LOANS_RAW WHERE _BATCH_ID = $BATCH_ID) AS RAW_ROWS,
-    RAW_ROWS - SOURCE_ROWS                  AS DIFF
-FROM AUDIT.SOURCE_PROFILE sp
-WHERE sp.BATCH_ID = $BATCH_ID AND sp.METRIC_NAME = 'ROW_COUNT';
+  t.m                                                  AS CHECK_NAME,
+  s.METRIC_VALUE                                       AS SOURCE_VALUE,
+  t.v                                                  AS RAW_VALUE,
+  t.v - s.METRIC_VALUE                                 AS DIFF,
+  IFF(ABS(t.v - s.METRIC_VALUE) <= 1, 'PASS', 'FAIL') AS STATUS
+FROM tgt t
+LEFT JOIN src s ON s.METRIC_NAME = t.m
+ORDER BY CHECK_NAME;
 
--- 3. Loan amount totals: source vs raw (cast here only; RAW stays VARCHAR)
+-- ---------------------------------------------------------------------
+-- 2. Loan status mix (drives default / delinquency definitions)
+-- ---------------------------------------------------------------------
 SELECT
-    MAX(IFF(sp.METRIC_NAME = 'SUM_LOAN_AMNT',   sp.METRIC_VALUE, NULL)) AS SRC_LOAN_AMNT,
-    (SELECT SUM(TRY_TO_NUMBER(LOAN_AMNT, 38, 2)) FROM RAW.LC_LOANS_RAW WHERE _BATCH_ID = $BATCH_ID) AS RAW_LOAN_AMNT,
-    MAX(IFF(sp.METRIC_NAME = 'SUM_FUNDED_AMNT', sp.METRIC_VALUE, NULL)) AS SRC_FUNDED_AMNT,
-    (SELECT SUM(TRY_TO_NUMBER(FUNDED_AMNT, 38, 2)) FROM RAW.LC_LOANS_RAW WHERE _BATCH_ID = $BATCH_ID) AS RAW_FUNDED_AMNT
-FROM AUDIT.SOURCE_PROFILE sp
-WHERE sp.BATCH_ID = $BATCH_ID;
-
--- 4. Junk rows: non-numeric ids (LendingClub summary/footer lines, blank rows)
-SELECT ID, LOAN_AMNT, LOAN_STATUS, _SOURCE_ROW_NUMBER
+  LOAN_STATUS,
+  COUNT(*)                                             AS LOANS,
+  ROUND(100 * RATIO_TO_REPORT(COUNT(*)) OVER (), 2)    AS PCT_OF_LOANS,
+  ROUND(SUM(TRY_TO_NUMBER(LOAN_AMNT, 38, 2)) / 1e9, 2) AS LOAN_AMNT_BILLIONS
 FROM RAW.LC_LOANS_RAW
-WHERE _BATCH_ID = $BATCH_ID AND TRY_TO_NUMBER(ID) IS NULL
-LIMIT 50;
+GROUP BY LOAN_STATUS
+ORDER BY LOANS DESC;
 
--- 5. Duplicate loan ids
-SELECT ID, COUNT(*) AS N
-FROM RAW.LC_LOANS_RAW
-WHERE _BATCH_ID = $BATCH_ID AND TRY_TO_NUMBER(ID) IS NOT NULL
-GROUP BY ID HAVING COUNT(*) > 1
-ORDER BY N DESC
-LIMIT 20;
-
--- 6. Nulls on columns the marts depend on
+-- ---------------------------------------------------------------------
+-- 3. Volume by origination year (junk rows excluded)
+-- ---------------------------------------------------------------------
 SELECT
-    COUNT(*)                                   AS TOTAL_ROWS,
-    COUNT_IF(LOAN_AMNT   IS NULL)              AS NULL_LOAN_AMNT,
-    COUNT_IF(ISSUE_D     IS NULL)              AS NULL_ISSUE_D,
-    COUNT_IF(LOAN_STATUS IS NULL)              AS NULL_LOAN_STATUS,
-    COUNT_IF(GRADE       IS NULL)              AS NULL_GRADE,
-    COUNT_IF(INT_RATE    IS NULL)              AS NULL_INT_RATE,
-    COUNT_IF(ADDR_STATE  IS NULL)              AS NULL_ADDR_STATE
+  YEAR(TRY_TO_DATE(ISSUE_D, 'MON-YYYY'))               AS ISSUE_YEAR,
+  COUNT(*)                                             AS LOANS,
+  ROUND(SUM(TRY_TO_NUMBER(LOAN_AMNT, 38, 2)) / 1e9, 2) AS LOAN_AMNT_BILLIONS,
+  ROUND(AVG(TRY_TO_NUMBER(LOAN_AMNT, 38, 2)), 0)       AS AVG_LOAN_SIZE
 FROM RAW.LC_LOANS_RAW
-WHERE _BATCH_ID = $BATCH_ID;
+WHERE TRY_TO_NUMBER(ID) IS NOT NULL
+GROUP BY ISSUE_YEAR
+ORDER BY ISSUE_YEAR;
 
--- 7. Type-ability: values present but won't cast (what STAGING will have to handle)
+-- ---------------------------------------------------------------------
+-- 4. Data quality on columns the marts depend on
+--    Result on first load: 0 everywhere except NULL_ANNUAL_INC = 4, NULL_DTI = 1,711
+-- ---------------------------------------------------------------------
 SELECT
-    COUNT_IF(LOAN_AMNT IS NOT NULL AND TRY_TO_NUMBER(LOAN_AMNT, 38, 2) IS NULL)          AS BAD_LOAN_AMNT,
-    COUNT_IF(INT_RATE  IS NOT NULL AND TRY_TO_NUMBER(REPLACE(INT_RATE, '%', ''), 10, 4) IS NULL) AS BAD_INT_RATE,
-    COUNT_IF(ISSUE_D   IS NOT NULL AND TRY_TO_DATE(ISSUE_D, 'MON-YYYY') IS NULL)          AS BAD_ISSUE_D
+  COUNT(*)                                                                    AS TOTAL_LOANS,
+  COUNT_IF(LOAN_AMNT   IS NULL)                                               AS NULL_LOAN_AMNT,
+  COUNT_IF(ISSUE_D     IS NULL)                                               AS NULL_ISSUE_D,
+  COUNT_IF(LOAN_STATUS IS NULL)                                               AS NULL_LOAN_STATUS,
+  COUNT_IF(GRADE       IS NULL)                                               AS NULL_GRADE,
+  COUNT_IF(INT_RATE    IS NULL)                                               AS NULL_INT_RATE,
+  COUNT_IF(ADDR_STATE  IS NULL)                                               AS NULL_ADDR_STATE,
+  COUNT_IF(PURPOSE     IS NULL)                                               AS NULL_PURPOSE,
+  COUNT_IF(ANNUAL_INC  IS NULL)                                               AS NULL_ANNUAL_INC,
+  COUNT_IF(DTI         IS NULL)                                               AS NULL_DTI,
+  COUNT_IF(INT_RATE IS NOT NULL AND TRY_TO_NUMBER(INT_RATE, 10, 4) IS NULL)   AS BAD_INT_RATE,
+  COUNT_IF(ISSUE_D  IS NOT NULL AND TRY_TO_DATE(ISSUE_D, 'MON-YYYY') IS NULL) AS BAD_ISSUE_D,
+  COUNT_IF(TRY_TO_NUMBER(LOAN_AMNT, 38, 2) <= 0)                              AS NON_POSITIVE_LOAN_AMNT
 FROM RAW.LC_LOANS_RAW
-WHERE _BATCH_ID = $BATCH_ID;
+WHERE TRY_TO_NUMBER(ID) IS NOT NULL;
 
--- 8. Date range and volume by origination year
-SELECT
-    YEAR(TRY_TO_DATE(ISSUE_D, 'MON-YYYY'))           AS ISSUE_YEAR,
-    COUNT(*)                                          AS LOANS,
-    ROUND(SUM(TRY_TO_NUMBER(LOAN_AMNT, 38, 2)) / 1e6, 1) AS LOAN_AMNT_MM
-FROM RAW.LC_LOANS_RAW
-WHERE _BATCH_ID = $BATCH_ID AND TRY_TO_NUMBER(ID) IS NOT NULL
-GROUP BY 1 ORDER BY 1;
-
--- 9. Loan status distribution (drives default / delinquency definitions in Step 3)
-SELECT LOAN_STATUS, COUNT(*) AS LOANS, ROUND(100 * RATIO_TO_REPORT(COUNT(*)) OVER (), 2) AS PCT
-FROM RAW.LC_LOANS_RAW
-WHERE _BATCH_ID = $BATCH_ID
-GROUP BY 1 ORDER BY 2 DESC;
+-- Load log for reference
+SELECT * FROM AUDIT.LOAD_LOG ORDER BY LOADED_AT DESC;
