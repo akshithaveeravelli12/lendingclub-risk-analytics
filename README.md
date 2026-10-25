@@ -91,7 +91,7 @@ cp .env.example .env                                  # fill in your Snowflake d
 
 **Reconciliation controls (all PASS):** row counts and balance totals at every hop (Source → RAW → STAGING → MARTS), junk rows excluded (33), unmapped statuses (0), duplicate loan ids (0), orphan borrower and date keys (0). Full detail: [`results/09_recon_all_layers.csv`](results/09_recon_all_layers.csv).
 
-All query outputs for Steps 1 and 2 are exported as CSVs in [`results/`](results/).
+All query outputs for Steps 1 to 3 are exported as CSVs in [`results/`](results/).
 
 **Charge-off rate by FICO band (resolved loans)**
 | FICO band | Borrowers | Charge-off rate |
@@ -165,6 +165,8 @@ Caveat: realized return uses resolved loans only, which skews recent vintages to
 | 2017 | 2.57 | 6.28 | | | | | |
 
 Default timing uses months from issue to last payment. A point is shown only when the whole vintage has reached that age by the data snapshot.
+
+**Full Step 3 outputs:** [`results/10_portfolio_kpis.csv`](results/10_portfolio_kpis.csv), [`results/11_risk_by_segment.csv`](results/11_risk_by_segment.csv) (all 24 segments incl. every loan purpose), [`results/12_vintage_curves.csv`](results/12_vintage_curves.csv).
 
 - 2007 to 2008 (crisis era) were the worst vintages: 21% to 26% bad by 36 months.
 - 2009 to 2011 were the cleanest (about 13% by 36 months).
