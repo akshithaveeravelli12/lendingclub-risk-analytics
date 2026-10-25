@@ -105,6 +105,71 @@ The 660 to 699 band holds 58% of borrowers and charges off at 2.4x the rate of 7
 
 **Note on the borrower dimension:** LendingClub anonymizes member ids, so `DIM_BORROWER` is the borrower profile at origination, 1:1 with the loan.
 
+## Step 3: Risk KPIs, segment pricing, vintage curves
+
+`sql/05_kpis.sql` builds three views in MARTS that Power BI reads directly: `VW_PORTFOLIO_KPIS`, `VW_RISK_BY_SEGMENT`, `VW_VINTAGE_CURVES`.
+
+**KPI definitions**
+| KPI | Definition |
+|---|---|
+| Charge-off rate | Charged-off loans / resolved loans (Fully Paid + Charged Off) |
+| Delinquency rate | Grace, late and default loans / active loans |
+| 30+ DPD rate | Loans 31+ days past due or in default / active loans |
+| Net loss rate | Net charge-offs / funded amount, resolved loans |
+| Recovery rate | Recoveries / gross charge-offs |
+| Realized return | (Total paid - funded) / funded, resolved loans, lifetime (not annualized) |
+
+### Portfolio KPIs
+| KPI | Value |
+|---|---|
+| Loans / funded | 2,260,668 / $34.0B |
+| Outstanding principal (912,609 active loans) | $9.51B |
+| Charge-off rate | 19.98% |
+| Delinquency rate / 30+ DPD rate | 3.76% / 2.36% |
+| Gross / net charge-offs | $3.005B / $2.734B |
+| Recovery rate | 10.82% ($325.3M) |
+| Net loss rate | 14.08% |
+| Average interest rate | 13.09% |
+
+### Key insight: higher pricing did not cover losses in grades E to G
+| Grade | Avg rate | Charge-off rate | Realized return |
+|---|---|---|---|
+| A | 7.08% | 6.04% | +5.40% |
+| B | 10.68% | 13.39% | +5.26% |
+| C | 14.14% | 22.44% | +2.76% |
+| D | 18.14% | 30.38% | +0.53% |
+| E | 21.83% | 38.43% | -1.24% |
+| F | 25.45% | 45.14% | -3.90% |
+| G | 28.07% | 49.67% | -8.56% |
+| Portfolio | 13.09% | 19.98% | +2.86% |
+
+- Grades E to G (189,607 loans, $3.41B funded) charged off at 38% to 50% and returned a loss despite 22% to 28% rates.
+- Small business loans charged off at 29.86% (1.5x the portfolio) while priced at 15.26%, close to grade C, returning -2.69%.
+- 60-month loans charged off at 2x the rate of 36-month loans (32.45% vs 16.02%).
+
+Caveat: realized return uses resolved loans only, which skews recent vintages toward early defaults. Vintage curves below compare loans at the same age.
+
+### Vintage curves: cumulative bad rate by months on book
+| Vintage | 6 | 12 | 18 | 24 | 36 | 48 | 60 |
+|---|---|---|---|---|---|---|---|
+| 2007 | 2.82 | 9.62 | 17.74 | 21.06 | 25.70 | 26.04 | 26.20 |
+| 2008 | 3.84 | 9.15 | 13.37 | 17.05 | 20.60 | 20.73 | 20.73 |
+| 2009 | 3.11 | 6.12 | 8.46 | 10.91 | 13.52 | 13.61 | 13.67 |
+| 2010 | 2.03 | 4.98 | 7.23 | 9.44 | 12.57 | 13.52 | 14.01 |
+| 2011 | 2.19 | 5.06 | 7.73 | 10.20 | 13.45 | 14.66 | 15.17 |
+| 2012 | 2.14 | 5.57 | 8.73 | 11.55 | 15.19 | 15.88 | 16.19 |
+| 2013 | 1.72 | 4.78 | 7.86 | 10.66 | 14.22 | 15.21 | 15.58 |
+| 2014 | 1.86 | 5.26 | 8.71 | 11.95 | 16.14 | 17.23 | |
+| 2015 | 2.14 | 6.11 | 10.11 | 13.38 | 17.43 | | |
+| 2016 | 2.61 | 6.89 | 10.81 | 13.65 | | | |
+| 2017 | 2.57 | 6.28 | | | | | |
+
+Default timing uses months from issue to last payment. A point is shown only when the whole vintage has reached that age by the data snapshot.
+
+- 2007 to 2008 (crisis era) were the worst vintages: 21% to 26% bad by 36 months.
+- 2009 to 2011 were the cleanest (about 13% by 36 months).
+- Credit then loosened during the growth years: at 36 months, the 2015 vintage (17.43%) ran 39% worse than 2010 (12.57%).
+
 ## Project layout
 ```
 scripts/   Python: download, profile, load, shared Snowflake connection
