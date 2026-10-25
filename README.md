@@ -75,6 +75,23 @@ cp .env.example .env                                  # fill in your Snowflake d
 | Orphan keys (borrower, issue date) | 0 / 0 |
 | End-to-end reconciliation | **16/16 PASS** |
 | Resolved-loan charge-off rate | 19.98% (269,320 of 1,348,059) |
+| Calendar dimension (DIM_DATE) | 5,114 days, 2007-01-01 to 2020-12-31, 168 months, unique keys |
+
+**Loans by status group (STAGING)**
+| Status group | Loans | Loan amount ($B) | Net charge-off ($M) |
+|---|---|---|---|
+| Fully Paid | 1,078,739 | 15.237 | 0.0 |
+| Current | 878,317 | 14.003 | 0.0 |
+| Charged Off | 269,320 | 4.187 | 2,733.4 |
+| Late (31 to 120 days) | 21,467 | 0.364 | 0.0 |
+| In Grace Period | 8,436 | 0.149 | 0.0 |
+| Late (16 to 30 days) | 4,349 | 0.076 | 0.0 |
+| Default | 40 | 0.001 | 0.4 |
+| **Total** | **2,260,668** | **34.016** | **2,733.8** |
+
+**Reconciliation controls (all PASS):** row counts and balance totals at every hop (Source → RAW → STAGING → MARTS), junk rows excluded (33), unmapped statuses (0), duplicate loan ids (0), orphan borrower and date keys (0). Full detail: [`results/09_recon_all_layers.csv`](results/09_recon_all_layers.csv).
+
+All query outputs for Steps 1 and 2 are exported as CSVs in [`results/`](results/).
 
 **Charge-off rate by FICO band (resolved loans)**
 | FICO band | Borrowers | Charge-off rate |
