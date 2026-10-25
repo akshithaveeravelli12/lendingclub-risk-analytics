@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Shared Snowflake connection helper. Reads credentials from .env."""
 import os
 
