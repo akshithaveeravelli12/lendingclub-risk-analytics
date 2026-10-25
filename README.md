@@ -91,7 +91,7 @@ cp .env.example .env                                  # fill in your Snowflake d
 
 **Reconciliation controls (all PASS):** row counts and balance totals at every hop (Source → RAW → STAGING → MARTS), junk rows excluded (33), unmapped statuses (0), duplicate loan ids (0), orphan borrower and date keys (0). Full detail: [`results/09_recon_all_layers.csv`](results/09_recon_all_layers.csv).
 
-All query outputs for Steps 1 to 3 are exported as CSVs in [`results/`](results/).
+All query outputs for Steps 1 to 4 are exported as CSVs in [`results/`](results/).
 
 **Charge-off rate by FICO band (resolved loans)**
 | FICO band | Borrowers | Charge-off rate |
@@ -171,6 +171,43 @@ Default timing uses months from issue to last payment. A point is shown only whe
 - 2007 to 2008 (crisis era) were the worst vintages: 21% to 26% bad by 36 months.
 - 2009 to 2011 were the cleanest (about 13% by 36 months).
 - Credit then loosened during the growth years: at 36 months, the 2015 vintage (17.43%) ran 39% worse than 2010 (12.57%).
+
+## Step 4: Delinquency buckets on the active book
+
+`sql/06_delinquency.sql` builds `MARTS.VW_DELINQUENCY_BUCKETS`: the 912,609 active loans split by late-payment bucket (Current, Grace, Late 16 to 30, Late 31 to 120, Default), by grade and vintage.
+
+The dataset is a single snapshot of each loan's status, not monthly history, so true roll rates (Current to 30 to 60 days) cannot be computed. This bucket view is the snapshot equivalent.
+
+### By grade (share of outstanding balance)
+| Grade | Active loans | Outstanding ($M) | Current | Grace | Late 16 to 30 | Late 31 to 120 | Delinquent balance |
+|---|---|---|---|---|---|---|---|
+| A | 197,839 | 2,002.7 | 98.88% | 0.31% | 0.16% | 0.65% | 1.12% |
+| B | 270,462 | 2,676.0 | 97.21% | 0.63% | 0.36% | 1.80% | 2.79% |
+| C | 267,738 | 2,847.3 | 95.29% | 1.14% | 0.58% | 2.99% | 4.71% |
+| D | 122,780 | 1,368.7 | 93.34% | 1.60% | 0.83% | 4.22% | 6.66% |
+| E | 41,453 | 455.4 | 90.88% | 2.05% | 1.09% | 5.96% | 9.12% |
+| F | 9,495 | 120.2 | 87.82% | 2.86% | 1.45% | 7.86% | 12.18% |
+| G | 2,842 | 40.2 | 85.35% | 3.78% | 1.60% | 9.27% | 14.65% |
+| **All** | **912,609** | **9,510.4** | **95.96%** | **0.97%** | **0.50%** | **2.57%** | **4.04%** |
+
+### By vintage
+| Vintage | Active loans | Outstanding ($M) | Delinquent balance | 30+ DPD balance |
+|---|---|---|---|---|
+| 2014 | 12,527 | 31.2 | 6.39% | 3.72% |
+| 2015 | 45,550 | 314.7 | 5.60% | 3.47% |
+| 2016 | 141,312 | 740.8 | 6.44% | 4.16% |
+| 2017 | 274,279 | 2,477.2 | 5.56% | 3.63% |
+| 2018 | 438,931 | 5,946.5 | 3.02% | 1.88% |
+| **All** | **912,609** | **9,510.4** | **4.04%** | **2.57%** |
+
+(2013 has 10 active loans and is omitted.)
+
+- About $384M (4.04%) of the $9.51B active book is delinquent; $244M is already 31 to 120 days late.
+- Delinquent balance rises 13x from grade A (1.12%) to grade G (14.65%), the same ordering as charge-offs.
+- Across every grade, about 64% of delinquent balance is already in the 31 to 120 day bucket: once loans slip, most go deep, so collections need to act in the grace and 16 to 30 day window.
+- 89% of the active balance ($8.4B) is in the 2017 and 2018 vintages. 2018 looks cleanest (3.02%) only because it is young; seasoned vintages run 5.6% to 6.4%, so 2018 delinquency should rise as it ages.
+
+**Full outputs:** [`results/13_delinquency_by_grade.csv`](results/13_delinquency_by_grade.csv), [`results/13_delinquency_by_vintage.csv`](results/13_delinquency_by_vintage.csv).
 
 ## Project layout
 ```
