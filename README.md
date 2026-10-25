@@ -47,7 +47,8 @@ cp .env.example .env                                  # fill in your Snowflake d
 ![Volume by year](images/03_volume_by_year.png)
 
 **Data quality on key columns**
-![Data quality](images/04_data_quality.png)
+![Data quality, part 1](images/04_data_quality_a.png)
+![Data quality, part 2](images/04_data_quality_b.png)
 
 ### Design choices (worth saying in an interview)
 - **RAW is all VARCHAR.** No type casting at load, so nothing gets silently dropped or coerced. Typing happens in STAGING, where bad values are counted, not lost.
