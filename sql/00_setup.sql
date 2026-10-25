@@ -7,7 +7,7 @@ USE ROLE SYSADMIN;
 
 CREATE WAREHOUSE IF NOT EXISTS LOAN_WH
   WAREHOUSE_SIZE = 'XSMALL'
-  AUTO_SUSPEND = 60          -- seconds; protects trial credits
+  AUTO_SUSPEND = 60          -- seconds
   AUTO_RESUME = TRUE
   INITIALLY_SUSPENDED = TRUE;
 
