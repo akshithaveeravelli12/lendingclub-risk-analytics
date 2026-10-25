@@ -35,7 +35,19 @@ cp .env.example .env                                  # fill in your Snowflake d
 | Source-vs-RAW reconciliation | 8/8 PASS; only variance $0.31 on $27.3B total payments (float vs exact decimal) |
 | Duplicate loan ids | 0 |
 | Nulls on key columns | 0, except DTI 1,711 and annual income 4 |
-| Resolved-loan charge-off rate | 19.96% (268,559 of 1,345,310 Fully Paid + Charged Off) |
+| Resolved-loan charge-off rate | 19.96% on standard statuses (268,559 of 1,345,310); 19.98% once "does not meet credit policy" loans are folded in (see Step 2) |
+
+**Source vs RAW reconciliation (8/8 PASS)**
+![Reconciliation](images/01_recon_pass.png)
+
+**Loan status mix**
+![Status mix](images/02_status_mix.png)
+
+**Volume by origination year**
+![Volume by year](images/03_volume_by_year.png)
+
+**Data quality on key columns**
+![Data quality](images/04_data_quality.png)
 
 ### Design choices (worth saying in an interview)
 - **RAW is all VARCHAR.** No type casting at load, so nothing gets silently dropped or coerced. Typing happens in STAGING, where bad values are counted, not lost.
@@ -44,9 +56,40 @@ cp .env.example .env                                  # fill in your Snowflake d
 - **Key-pair auth** via a dedicated `TYPE = SERVICE` user; the private key never leaves the laptop.
 - **COPY results logged** to `AUDIT.LOAD_LOG` (rows parsed, rows loaded, errors).
 
+## Step 2: STAGING + star schema + end-to-end reconciliation
+
+| # | File | What it builds |
+|---|------|----------------|
+| 1 | `sql/02_staging.sql` | `STAGING.STG_LOANS`: typed and cleaned, 33 junk rows excluded, deduped on loan id, 10 raw statuses mapped to 7 risk groups, risk flags (`IS_RESOLVED`, `IS_BAD`, `IS_DELINQUENT`, `IS_30PLUS_DPD`), gross and net charge-off amounts |
+| 2 | `sql/03_marts.sql` | `MARTS.DIM_DATE` (daily calendar 2007 to 2020), `MARTS.DIM_BORROWER` (borrower profile at origination with FICO, income, DTI and tenure bands), `MARTS.FCT_LOAN` (one row per loan, keys to both dimensions) |
+| 3 | `sql/04_recon.sql` | 16 PASS/FAIL controls SOURCE → RAW → STAGING → MARTS, written to `AUDIT.RECON_RESULTS` |
+
+### Step 2 results
+| Check | Result |
+|---|---|
+| Loans in STAGING and FCT_LOAN | 2,260,668 (unique, 0 duplicates) |
+| Loan amount carried through every layer | $34,016,115,925 (exact match) |
+| Net charge-offs (after recoveries net of fees) | $2.73B |
+| Unmapped loan statuses | 0 |
+| Orphan keys (borrower, issue date) | 0 / 0 |
+| End-to-end reconciliation | **16/16 PASS** |
+| Resolved-loan charge-off rate | 19.98% (269,320 of 1,348,059) |
+
+**Charge-off rate by FICO band (resolved loans)**
+| FICO band | Borrowers | Charge-off rate |
+|---|---|---|
+| Under 660 | 489 | 30.88% |
+| 660 to 699 | 1,304,313 | 23.60% |
+| 700 to 739 | 673,794 | 16.08% |
+| 740+ | 282,072 | 9.65% |
+
+The 660 to 699 band holds 58% of borrowers and charges off at 2.4x the rate of 740+.
+
+**Note on the borrower dimension:** LendingClub anonymizes member ids, so `DIM_BORROWER` is the borrower profile at origination, 1:1 with the loan.
+
 ## Project layout
 ```
 scripts/   Python: download, profile, load, shared Snowflake connection
-sql/       Snowflake DDL and checks (staging/marts/recon added in later steps)
+sql/       Snowflake setup, RAW checks, staging, star schema, reconciliation
 data/      local data (git-ignored)
 ```
