@@ -4,19 +4,19 @@ LendingClub accepted loans, 2007–2018Q4 → Snowflake (RAW → STAGING → MAR
 
 ## Step 1: Download + RAW layer
 
-### 0. Prereqs
-- Snowflake trial account (30 days of free credits is plenty; an X-Small warehouse loads this in minutes)
-- Kaggle account → Settings → API Tokens → **Create Legacy API Key** → save `kaggle.json` to `~/.kaggle/` (or, on Python 3.11+, a new API token in `~/.kaggle/access_token`)
+### Prerequisites
+- Snowflake account
+- Kaggle API credentials in `~/.kaggle/`
 - Python 3.9+
-- Snowflake service user with key-pair auth: `sql/00b_service_user.sql` (no passwords in code or config)
+- Snowflake service user with key-pair auth: `sql/00b_service_user.sql`
 
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env                                  # fill in your Snowflake details
 ```
 
-### 1. Run in this order
+### Run order
 
 | # | What | Where |
 |---|------|-------|
@@ -50,12 +50,24 @@ cp .env.example .env                                  # fill in your Snowflake d
 ![Data quality, part 1](images/04_data_quality_a.png)
 ![Data quality, part 2](images/04_data_quality_b.png)
 
-### Design choices (worth saying in an interview)
+### Design choices
 - **RAW is all VARCHAR.** No type casting at load, so nothing gets silently dropped or coerced. Typing happens in STAGING, where bad values are counted, not lost.
 - **Lineage columns** on every row: `_BATCH_ID`, `_SOURCE_FILE`, `_SOURCE_ROW_NUMBER`, `_LOADED_AT`.
 - **Source profile captured independently** (pandas, outside Snowflake) and stored in `AUDIT.SOURCE_PROFILE`, so Step 2 reconciliation compares two independent counts, not Snowflake against itself.
-- **Key-pair auth** via a dedicated `TYPE = SERVICE` user; the private key never leaves the laptop.
+- **Key-pair auth** via a dedicated `TYPE = SERVICE` user; no passwords in code or config.
 - **COPY results logged** to `AUDIT.LOAD_LOG` (rows parsed, rows loaded, errors).
+
+### How Snowflake is used
+| Need | Snowflake feature |
+|---|---|
+| Upload the 393 MB source file | Internal stage `@RAW.STG_LC` + `PUT` |
+| Bulk load 2,260,701 rows, 0 errors, result logged | `COPY INTO` with a named file format and `ON_ERROR = CONTINUE` |
+| Row-level lineage | `METADATA$FILENAME`, `METADATA$FILE_ROW_NUMBER` |
+| Compute | X-Small virtual warehouse `LOAN_WH`, auto-suspend after 60 seconds, auto-resume |
+| Layered model | `LOAN_RISK` database with `RAW`, `STAGING`, `MARTS`, `AUDIT` schemas |
+| Dashboard layer | Views: `VW_PORTFOLIO_KPIS`, `VW_RISK_BY_SEGMENT`, `VW_VINTAGE_CURVES`, `VW_DELINQUENCY_BUCKETS`, `VW_RISK_BY_STATE` |
+| Pipeline security | `TYPE = SERVICE` user with RSA key-pair authentication |
+| Snowflake SQL features | `TRY_TO_NUMBER` / `TRY_TO_DATE` (safe casting), `QUALIFY` (dedupe), `IFF`, `COUNT_IF`, `GENERATOR` (calendar), `PIVOT`, `GROUPING SETS`, `RATIO_TO_REPORT` |
 
 ## Step 2: STAGING + star schema + end-to-end reconciliation
 
@@ -91,7 +103,7 @@ cp .env.example .env                                  # fill in your Snowflake d
 
 **Reconciliation controls (all PASS):** row counts and balance totals at every hop (Source → RAW → STAGING → MARTS), junk rows excluded (33), unmapped statuses (0), duplicate loan ids (0), orphan borrower and date keys (0). Full detail: [`results/09_recon_all_layers.csv`](results/09_recon_all_layers.csv).
 
-All query outputs for Steps 1 to 4 are exported as CSVs in [`results/`](results/).
+Query outputs for Steps 2 to 4 are exported as CSVs in [`results/`](results/); Step 1 outputs are shown as screenshots above.
 
 **Charge-off rate by FICO band (resolved loans)**
 | FICO band | Borrowers | Charge-off rate |
@@ -107,7 +119,7 @@ The 660 to 699 band holds 58% of borrowers and charges off at 2.4x the rate of 7
 
 ## Step 3: Risk KPIs, segment pricing, vintage curves
 
-`sql/05_kpis.sql` builds three views in MARTS that Power BI reads directly: `VW_PORTFOLIO_KPIS`, `VW_RISK_BY_SEGMENT`, `VW_VINTAGE_CURVES`.
+`sql/05_kpis.sql` builds three views in MARTS for the dashboard layer: `VW_PORTFOLIO_KPIS`, `VW_RISK_BY_SEGMENT`, `VW_VINTAGE_CURVES`.
 
 **KPI definitions**
 | KPI | Definition |
@@ -212,6 +224,8 @@ The dataset is a single snapshot of each loan's status, not monthly history, so 
 ## Project layout
 ```
 scripts/   Python: download, profile, load, shared Snowflake connection
-sql/       Snowflake setup, RAW checks, staging, star schema, reconciliation
+sql/       Snowflake setup, RAW checks, staging, star schema, reconciliation, KPI views
+results/   CSV exports of query outputs (Steps 2 to 4)
+images/    Step 1 result screenshots
 data/      local data (git-ignored)
 ```
