@@ -2,6 +2,14 @@
 
 LendingClub accepted loans, 2007–2018Q4 → Snowflake (RAW → STAGING → MARTS) → Power BI.
 
+**2.26M loans · $34.0B funded · 16/16 reconciliation controls PASS · 4-page Power BI risk dashboard**
+
+**Key finding:** grades E to G (189,607 loans, $3.41B) charged off at 38% to 50% and lost money despite 22% to 28% interest rates, while the portfolio charged off at 19.98%.
+
+![Risk & Pricing dashboard](images/dashboard_2_risk_pricing.png)
+
+**Stack:** Snowflake · SQL · Python (pandas) · Power BI (DAX) · GitHub
+
 ## Step 1: Download + RAW layer
 
 ### Prerequisites
@@ -221,11 +229,49 @@ The dataset is a single snapshot of each loan's status, not monthly history, so 
 
 **Full outputs:** [`results/13_delinquency_by_grade.csv`](results/13_delinquency_by_grade.csv), [`results/13_delinquency_by_vintage.csv`](results/13_delinquency_by_vintage.csv).
 
+## Step 5: Power BI dashboard
+
+The dashboard reads five curated MARTS views, exported as CSV extracts by `sql/08_powerbi_exports.sql` (the state view is built in `sql/07_powerbi_views.sql`).
+
+| File | Contents |
+|---|---|
+| [`powerbi_data/Lending_Club_Risk_Dashboard.pbix`](powerbi_data/Lending_Club_Risk_Dashboard.pbix) | Power BI Desktop report |
+| [`powerbi_data/Lending_Club_Risk_Dashboard.pdf`](powerbi_data/Lending_Club_Risk_Dashboard.pdf) | PDF export of all 4 pages |
+| `powerbi_data/pbi_*.csv` | Extracts: portfolio KPIs (1 row), risk by segment (24), vintage curves (98), delinquency buckets (162), risk by state (51) |
+
+**Build notes**
+- Five independent summary tables with no relationships, so no cross-filtering between unrelated grains.
+- KPI cards driven by DAX measures for display formatting, e.g. `Funded = FORMAT(SUM(pbi_portfolio_kpis[FUNDED_AMNT]) / 1000000000, "$0.00") & "B"`.
+- Conditional formatting: realized return colored red below zero and green above; vintage grid and state map shaded on a white-to-red gradient.
+- Delinquency buckets sorted by a `BUCKET_ORDER` column (Current → Grace → 16 to 30 → 31 to 120 → Default) rather than alphabetically.
+- State column categorized as State or Province; AK and HI hidden from the map only so the lower 48 frame correctly.
+
+### Page 1: Portfolio Overview
+Six KPI cards (2,260,668 loans · $34.00B funded · $9.51B outstanding · 19.98% charge-off · 3.76% delinquency · 14.08% net loss) with funded amount and charge-off rate by grade.
+
+![Portfolio Overview](images/dashboard_1_portfolio_overview.png)
+
+### Page 2: Risk & Pricing
+Realized return by grade (E to G negative), interest rate vs charge-off rate by grade, and a loan-purpose table sorted by charge-off rate (small business highest at 29.86%).
+
+![Risk & Pricing](images/dashboard_2_risk_pricing.png)
+
+### Page 3: Vintage Curves
+Cumulative bad rate by months on book, one line per origination year, with a vintage selector and a vintage × month heatmap.
+
+![Vintage Curves](images/dashboard_3_vintage_curves.png)
+
+### Page 4: Delinquency & States
+Charge-off rate by state (filled map), delinquent balance by grade and bucket, and active outstanding balance by vintage.
+
+![Delinquency & States](images/dashboard_4_delinquency_states.png)
+
 ## Project layout
 ```
 scripts/   Python: download, profile, load, shared Snowflake connection
-sql/       Snowflake setup, RAW checks, staging, star schema, reconciliation, KPI views
+sql/       Snowflake setup, RAW checks, staging, star schema, reconciliation, KPI views, Power BI extracts
+powerbi_data/  Power BI report (.pbix, .pdf) and the CSV extracts it reads
 results/   CSV exports of query outputs (Steps 2 to 4)
-images/    Step 1 result screenshots
+images/    Step 1 result screenshots and dashboard pages
 data/      local data (git-ignored)
 ```
